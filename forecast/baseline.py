@@ -6,7 +6,7 @@ as a baseline to determine if more complex models are good enough to employ.
 
 Naive1: Carry last value forward across forecast horizon (random walk)
 SNaive: Carry forward value from last seasonal period
-Average: Carry forward average of last n periods (default whole time series)
+Average: Carry forward average of observations
 Drift: Carry forward last time period, but allow for upwards/downwards drift.
 
 '''
@@ -14,65 +14,34 @@ Drift: Carry forward last time period, but allow for upwards/downwards drift.
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-
+from abc import ABC, abstractmethod
 
 def interval_multipler(level):
     return norm.ppf(1-(1-level)/2)
 
-class Naive1(object):
+class Forecast(ABC):
     '''
-    Naive1 or NF1: Carry the last value foreward across a
-    forecast horizon
-    
-    See Makridakis, Wheelwright and Hyndman (1998)
-
+    Abstract base class for all baseline forecast
+    methods
     '''
     def __init__(self):
-        '''
-        Constructor method
-
-        Parameters:
-        -------
-        level - list, confidence levels for prediction intervals (e.g. [90, 95])
-        '''
-        self._in_sample = None
         self._fitted = None
-        
+
     def _get_fitted(self):
         return self._fitted['pred']
 
     def _get_resid(self):
         return self._fitted['resid']
 
+    @abstractmethod
     def fit(self, train):
-        '''
-        Train the naive model
+        pass
 
-        Parameters:
-        --------
-        train - numpy.array, vector of the time series used for training
-        
-        '''
-        self._pred = train[-1]
-        self._fitted = pd.DataFrame(train)
-        self._fitted.columns=['actual']
-        self._fitted['pred'] = self._fitted['actual'].shift(periods=1)
-        self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
-        self._resid_std = self._fitted['resid'].std()
+    @abstractmethod
+    def predict(self, horizon, return_predict_int=False, alphas=None):
+        pass
 
-    def predict(self, horizon):
-        '''
-        Parameters:
-        --------
-        horizon - int, forecast horizon. 
-
-        Returns:
-        ------
-        np.array, vector of predictions. length=horizon
-        '''
-        return np.full(shape=horizon, fill_value=self._pred, dtype=float)
-
-    def prediction_interval(self, horizon, levels=None):
+    def _prediction_interval(self, horizon, alphas=None):
         '''
         Prediction intervals for naive forecast 1 (NF1)
 
@@ -106,10 +75,11 @@ class Naive1(object):
         limits for each prediction interval specified.
 
         '''
-        if levels is None:
-            levels = [0.80, 0.95]
 
-        zs = [interval_multipler(level) for level in levels]
+        if alphas is None:
+            alpha = [0.20, 0.10]
+
+        zs = [interval_multipler(1-alpha) for alpha in alphas]
         
         pis = []
 
@@ -122,7 +92,120 @@ class Naive1(object):
             
         return pis
 
+    @abstractmethod
     def _std_h(self, horizon):
+        '''
+        Calculate the standard error of the residuals over
+        a forecast horizon.  This is method specific.
+        '''
+        pass
+
+    #breaks PEP8 to align with statsmodels naming
+    fittedvalues = property(_get_fitted)
+    resid = property(_get_resid)
+
+
+
+class Naive1(Forecast):
+    '''
+    Naive1 or NF1: Carry the last value foreward across a
+    forecast horizon
+    
+    See Makridakis, Wheelwright and Hyndman (1998) and
+    Hyndman:
+    https://otexts.com/fpp2/simple-methods.html
+
+    '''
+    def __init__(self):
+        '''
+        Constructor method
+
+        Parameters:
+        -------
+        level - list, confidence levels for prediction intervals (e.g. [90, 95])
+        '''
+        self._fitted = None
+
+    def fit(self, train):
+        '''
+        Train the naive model
+
+        Parameters:
+        --------
+        train - numpy.array, vector of the time series used for training
+        
+        '''
+        self._pred = train[-1]
+        self._fitted = pd.DataFrame(train)
+        self._fitted.columns=['actual']
+        self._fitted['pred'] = self._fitted['actual'].shift(periods=1)
+        self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
+        self._resid_std = self._fitted['resid'].std()
+
+    def predict(self, horizon, return_predict_int=False, alphas=None):
+        '''
+        Forecast and optionally produce 100(1-alpha) prediction intervals.
+
+        Prediction intervals for naive forecast 1 (NF1)
+
+        lower = pred - z * std_h
+        upper = pred + z * std_h
+
+        where 
+
+        std_h = resid_std * sqrt(h
+
+        resid_std = standard deviation of in-sample residuals
+
+        h = horizon
+
+        See and credit: https://otexts.com/fpp2/prediction-intervals.html
+
+        Pre-requisit: Must have called fit()
+
+        Parameters:
+        --------
+        horizon - int, forecast horizon. 
+
+        return_predict_int - bool, if True calculate 100(1-alpha) prediction
+        intervals for the forecast. (default=False)
+
+        alphas - list of floats, controls set of prediction intervals returned and the width of each. 
+        Intervals are 100(1-alpha) in width. 
+        e.g. [0.2, 0.1] would return the 80% and 90% prediction intervals of the forecast distribution.
+        default=None.  When return_predict_int = True the default behaviour is to 
+        return 80 and 90% intervals.
+
+        Returns:
+        ------
+
+        if return_predict_int = False
+
+        np.array, vector of predictions. length=horizon
+
+        if return_predict_int = True then returns a tuple.
+
+        0. np.array, vector of predictions. length=horizon
+        1. list of numpy.array[lower_pi, upper_pi].  One for each prediction interval.
+
+        '''          
+        if self._fitted is None:
+            raise UnboundLocalError('Must call fit() prior to predict()')
+
+        if alphas is None:
+            alphas = [0.2, 0.1]
+    
+        preds =  np.full(shape=horizon, fill_value=self._pred, dtype=float)
+
+        if return_predict_int:
+            return preds, self._prediction_interval(horizon, alphas)
+        else:
+            return preds
+
+    def _std_h(self, horizon):
+        '''
+        Calculate the sample standard deviation.
+        '''
         indexes = np.sqrt(np.arange(1, horizon+1))
         
         std = np.full(shape=horizon, 
@@ -132,13 +215,8 @@ class Naive1(object):
         std *= indexes
         return std
 
-    #breaks PEP8 to fit with statsmodels
-    fittedvalues = property(_get_fitted)
-    resid = property(_get_resid)
         
-
-
-class SNaive(object):
+class SNaive(Forecast):
     '''
     Seasonal Naive Forecast SNF
 
@@ -159,12 +237,6 @@ class SNaive(object):
         '''
         self._period = period
         self._fitted = None
-
-    def _get_fitted(self):
-        return self._fitted['pred']
-
-    def _get_resid(self):
-        return self._fitted['resid']
         
     def fit(self, train):
         '''
@@ -186,9 +258,7 @@ class SNaive(object):
         self._resid_std = self._fitted['resid'].clip(lower, upper).std()
         
         
-        
-
-    def predict(self, horizon):
+    def predict(self, horizon, return_predict_int=False, alphas=None):
         '''
         Predict time series over a horizon
 
@@ -201,6 +271,12 @@ class SNaive(object):
         np.array, vector of predictions. length=horizon
         '''
 
+        if self._fitted is None:
+            raise UnboundLocalError('Must call fit() prior to predict()')
+        
+        if alphas is None:
+            alphas = [0.2, 0.1]
+    
         preds = np.array([], dtype=float)
         
         for i in range(0, int(horizon/self._period)):
@@ -208,78 +284,19 @@ class SNaive(object):
             
         preds = np.concatenate([preds, self._f.copy()[:horizon%self._period]], axis=0)
         
-        return preds
-
-
-        
-    def prediction_interval(self, horizon, levels=None):
-        '''
-        Prediction intervals for seasonal naive
-
-        lower = pred - z * std_h
-        upper = pred + z * std_h
-
-        where 
-
-        std_h = resid_std * sqrt(k + 1)
-
-        resid_std = standard deviation of in-sample residuals
-
-        k = integer part of (h - 1) / m 
-
-        h = horizon
-
-        m = self._period
-
-        See and credit: https://otexts.com/fpp2/prediction-intervals.html
-
-        Pre-requisit: Must have called fit()
-
-        Parameters:
-        ---------
-        horizon - int, forecast horizon
-
-        levels - list, of floats representing prediction limits
-        e.g. [0.80, 0.90, 0.95] will calculate three sets ofprediction intervals
-        giving limits for which will include the actual future value with probability 
-        80, 90 and 95 percent, respectively (default = [0.8, 0.95]).
-
-        Returns:
-        --------
-        list - of np.array matricies that contain the lower and upper prediction
-        limits for each prediction interval specified.
-
-        '''
-
-        if levels is None:
-            levels = [0.80, 0.95]
-
-        zs = [interval_multipler(level) for level in levels]
-        
-        pis = []
-
-        std_h = self._std_h(horizon)
-
-        for z in zs:
-            hw = z * std_h
-            pis.append(np.array([self.predict(horizon) - hw, 
-                                 self.predict(horizon) + hw]).T)
-            
-        return pis
+        if return_predict_int:
+            return preds, self._prediction_interval(horizon, alphas)
+        else:
+            return preds
 
     def _std_h(self, horizon):
         
         h = np.arange(1, horizon+1)
         #need to query if should be +1 or not.
         return self._resid_std * np.sqrt(((h - 1) / self._period).astype(np.int)+1)
-
-
-    #breaks PEP8 to fit with statsmodels
-    fittedvalues = property(_get_fitted)
-    resid = property(_get_resid)
         
 
-class Average(object):
+class Average(Forecast):
     '''
     Average forecast.  Forecast is set to the average
     of the historical data.
@@ -287,8 +304,7 @@ class Average(object):
     See Makridakis, Wheelwright and Hyndman (1998)
 
     '''
-    def __init__(self, min_t=0):
-        self._min_t = min_t
+    def __init__(self):
         self._pred = None
         self._fitted = None
 
@@ -307,16 +323,16 @@ class Average(object):
         train - numpy.array, vector of the time series used for training
         '''
         
-        self._t = len(train[-self._min_t:])
-        self._pred = train[-self._min_t:].mean()
-        self._resid_std = (train[-self._min_t:] - self._pred).std()
-        self._fitted = pd.DataFrame(train[-self._min_t:])
+        self._t = len(train)
+        self._pred = train.mean()
+        self._resid_std = (train - self._pred).std()
+        self._fitted = pd.DataFrame(train)
         self._fitted.columns=['actual']
         self._fitted['pred'] = self._pred
         self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
 
         
-    def predict(self, horizon):
+    def predict(self, horizon, return_predict_int=False, alphas=None):
         '''
         Predict time series over a horizon
 
@@ -328,38 +344,28 @@ class Average(object):
         ------
         np.array, vector of predictions. length=horizon
         '''
-        return np.full(shape=horizon, fill_value=self._pred, dtype=float)
 
-    def prediction_interval(self, horizon, levels=None):
+        if self._fitted is None:
+            raise UnboundLocalError('Must call fit() prior to predict()')
         
-        if levels is None:
-            levels = [0.80, 0.95]
+        if alphas is None:
+            alphas = [0.2, 0.1]
 
-        zs = [interval_multipler(level) for level in levels]
+        preds =  np.full(shape=horizon, fill_value=self._pred, dtype=float)
 
-        hws = []
-        for z in zs:
-            hw = self._half_width(horizon, z)
-            hws.append(np.array([self._pred - hw, self._pred + hw]).T)
+        if return_predict_int:
+            return preds, self._prediction_interval(horizon, alphas)
+        else:
+            return preds
 
-        return hws
-
-
-    def _half_width(self, horizon, z):
-        hw =  z * self._resid_std * np.sqrt(1 + (1/self._t))
-        return np.full(shape=horizon, fill_value=hw, dtype=np.float)
-
-    #breaks PEP8 to fit with statsmodels
-    fittedvalues = property(_get_fitted)
-    resid = property(_get_resid)
+    def _std_h(self, horizon):
+        std = self._resid_std * np.sqrt(1 + (1/self._t))
+        return np.full(shape=horizon, fill_value=std, dtype=np.float)
 
 
-       
-
-         
 
 
-class Drift(object):
+class Drift(Forecast):
     '''
     Naive1 with drift: Carry the last value foreward across a
     forecast horizon but allow for upwards of downwards drift.
@@ -371,12 +377,6 @@ class Drift(object):
     '''
     def __init__(self):
         self._fitted = None
-
-    def _get_fitted(self):
-        return self._fitted['pred']
-
-    def _get_resid(self):
-        return self._fitted['resid']
     
     def fit(self, train):
         '''
@@ -398,7 +398,7 @@ class Drift(object):
         self._resid_std = self._fitted['resid'].std()
 
 
-    def predict(self, horizon):
+    def predict(self, horizon, return_predict_int=False, alphas=None):
         '''
         Parameters:
         --------
@@ -408,85 +408,35 @@ class Drift(object):
         ------
         np.array, vector of predictions. length=horizon
         '''
+
+        if self._fitted is None:
+            raise UnboundLocalError('Must call fit() prior to predict()')
+        
+        if alphas is None:
+            alphas = [0.2, 0.1]
+
         preds = np.arange(1, horizon+1, dtype=float) * self._gradient
         preds += self._last_value
-        return preds
 
-    def prediction_interval(self, horizon, levels=None):
-        '''
-        Prediction intervals for seasonal naive
-
-        lower = pred - z * std_h
-        upper = pred + z * std_h
-
-        where 
-
-        std_h = resid_std * sqrt(h* (1 + h/T))
-
-        resid_std = standard deviation of in-sample residuals
-
-        h = horizon
-
-        T = length of time series
-
-        See and credit: https://otexts.com/fpp2/prediction-intervals.html
-
-        Pre-requisit: Must have called fit()
-
-        Parameters:
-        ---------
-        horizon - int, forecast horizon
-
-        levels - list, of floats representing prediction limits
-        e.g. [0.80, 0.90, 0.95] will calculate three sets ofprediction intervals
-        giving limits for which will include the actual future value with probability 
-        80, 90 and 95 percent, respectively (default = [0.8, 0.95]).
-
-        Returns:
-        --------
-        list - of np.array matricies that contain the lower and upper prediction
-        limits for each prediction interval specified.
-
-        '''
-
-        if levels is None:
-            levels = [0.80, 0.95]
-
-        zs = [interval_multipler(level) for level in levels]
-        
-        pis = []
-
-        std_h = self._std_h(horizon)
-
-        for z in zs:
-            hw = z * std_h
-            pis.append(np.array([self.predict(horizon) - hw, 
-                                 self.predict(horizon) + hw]).T)
-            
-        return pis
+        if return_predict_int:
+            return preds, self._prediction_interval(horizon, alphas)
+        else:
+            return preds
 
     def _std_h(self, horizon):
         
         h = np.arange(1, horizon+1)
         return self._resid_std * np.sqrt(h * (1 + (h / self._t)))
 
-    #breaks PEP8 to fit with statsmodels
-    fittedvalues = property(_get_fitted)
-    resid = property(_get_resid)
-
-
 
 class EnsembleNaive(object):
-    def __init__(self, seasonal_periods=7, average_lookback=180):
+    def __init__(self, seasonal_periods=7):
         self._estimators = {'NF1':Naive1(),
                             'SNaive':SNaive(period=seasonal_periods),
                             'Average':Average(),
-                            'Average_'+str(average_lookback):Average(min_t=average_lookback),
-                            'Drift':Drift(),
-                            'SES':StatsModelsForecastObject(SimpleExpSmoothingWrapper())
+                            'Drift':Drift()
                             }
        
-
     def fit(self, train):
         for key, estimator in self._estimators.items():
             estimator.fit(train)
