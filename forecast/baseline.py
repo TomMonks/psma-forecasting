@@ -247,7 +247,7 @@ class SNaive(Forecast):
         train - numpy.array, vector of the time series used for training
         '''
         self._f = train[-self._period:]
-        self._fitted = pd.DataFrame(train.copy())
+        self._fitted = pd.DataFrame(train.to_numpy(), index=train.index)
         self._fitted.columns=['actual']
         self._fitted['pred'] = self._fitted['actual'].shift(periods=self._period)
         self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
@@ -451,7 +451,7 @@ class EnsembleNaive(object):
 
 
 
-def baseline_estimators(seasonal_periods, average_lookback=None):
+def baseline_estimators(seasonal_periods):
     '''
     Generate a collection of baseline forecast objects
     
