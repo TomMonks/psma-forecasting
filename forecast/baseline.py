@@ -132,11 +132,15 @@ class Naive1(Forecast):
 
         Parameters:
         --------
-        train - numpy.array, vector of the time series used for training
-        
+        train - array-like, vector, series, or dataframe of the time series used for training
         '''
-        self._pred = train[-1]
-        self._fitted = pd.DataFrame(train)
+        _train = np.asarray(train)
+        self._pred = _train[-1]
+        self._fitted = pd.DataFrame(_train)
+
+        if isinstance(train, (pd.DataFrame, pd.Series)):
+            self._fitted.index = train.index
+
         self._fitted.columns=['actual']
         self._fitted['pred'] = self._fitted['actual'].shift(periods=1)
         self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
@@ -244,9 +248,13 @@ class SNaive(Forecast):
 
         Parameters:
         --------
-        train - numpy.array, vector of the time series used for training
+        train - pd.DataFrame or pd.Series containing the time series used for training
         '''
-        self._f = train[-self._period:]
+        if isinstance(train, (pd.Series)):
+            self._f = np.asarray(train)[-self._period:]
+        elif isinstance(train, (pd.DataFrame)):
+            self._f = train.to_numpy().T[0][-self._period:]
+
         self._fitted = pd.DataFrame(train.to_numpy(), index=train.index)
         self._fitted.columns=['actual']
         self._fitted['pred'] = self._fitted['actual'].shift(periods=self._period)
@@ -320,13 +328,14 @@ class Average(Forecast):
 
         Parameters:
         --------
-        train - numpy.array, vector of the time series used for training
+        train - pd.series, pd.DataFrame, of the time series used for training
         '''
         
+        _train = train.to_numpy()
         self._t = len(train)
         self._pred = train.mean()
         self._resid_std = (train - self._pred).std()
-        self._fitted = pd.DataFrame(train)
+        self._fitted = pd.DataFrame(_train, index=train.index)
         self._fitted.columns=['actual']
         self._fitted['pred'] = self._pred
         self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
@@ -384,16 +393,23 @@ class Drift(Forecast):
 
         Parameters:
         --------
-        train - pd.DataFrame, the time series used for training
+        train - pd.DataFrame or pd.Series, the time series used for training
         
         '''
-        self._last_value = train[-1:][0]
-        self._t = train.shape[0]
-        self._gradient = ((self._last_value - train[0]) / (self._t - 1))
+        #if dataframe convert to series for compatability with 
+        #proc (for convenience of passing the dataframe rather than a series)
+        if isinstance(train, (pd.DataFrame)):
+            _train = train.copy()[train.columns[0]]
+        else:
+            _train = train.copy()
+
+        self._last_value = _train[-1:][0]
+        self._t = _train.shape[0]
+        self._gradient = ((self._last_value - _train[0]) / (self._t - 1))
 
         self._fitted = pd.DataFrame(train)
         self._fitted.columns=['actual']
-        self._fitted['pred'] = train[0] + np.arange(1, self._t+1, dtype=float) * self._gradient
+        self._fitted['pred'] = _train[0] + np.arange(1, self._t+1, dtype=float) * self._gradient
         self._fitted['resid'] = self._fitted['actual'] - self._fitted['pred']
         self._resid_std = self._fitted['resid'].std()
 
