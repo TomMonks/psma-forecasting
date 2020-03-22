@@ -1,4 +1,4 @@
-name: psma_mac
+name: psma
 channels:
   - conda-forge
   - defaults
@@ -17,5 +17,3 @@ dependencies:
     - pmdarima==1.5.3
     - scikit-learn==0.22.1
     - sklearn==0.0
-prefix: /Users/thomasmonks/opt/anaconda3/envs/psma_mac
-
