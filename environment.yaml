@@ -1,4 +1,4 @@
-name: psma
+name: psma-forecast
 channels:
   - conda-forge
   - defaults
